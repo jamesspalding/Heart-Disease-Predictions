@@ -1,0 +1,453 @@
+---
+title: "Predicting and Visualizing Heart Disease"
+author: "James Spalding"
+date: "2023-10-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#Setting up...
+rm(list = ls())
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, include = TRUE)
+
+#Libraries used
+library(tidyverse)
+library(psych)
+library(cluster)
+library(ggfortify)
+library(MASS)
+library(gt)
+library(gtExtras)
+library(car)
+select = dplyr::select #fixes clash between packages
+```
+
+```{r, include = F}
+#Loading and cleaning up data
+heart = read.table("processed.heartdisease.txt", sep = ",")
+  names(heart) = as.character(unlist(heart[1,])) 
+  heart = heart[-1,] 
+  
+  #There are non-numeric "?" values in the df which need to be removed before converting to numeric
+  for(j in 1:14){
+    for(i in 1:303){
+      if(heart[i,j] == "?"){
+        heart[i,j] = 0 #I think making this value zero is better than completely removing the observation.
+      }
+    }
+  }
+  
+  #Now we can convert to numeric.
+  heart = as.data.frame(lapply(heart, as.numeric))
+
+heartTest = heart
+for(i in 1:303){ #transforming the levels of heart disease into have/don't have, will be useful later.
+  if(heart[i,14]!=0){
+    heartTest[i,14] = 1
+  }
+}
+
+attach(heartTest) #I'm sorry
+```
+
+## Introduction
+
+The objective of this paper is to try and find and showcase connections between various heart measurements and the presence of heart disease in patients. The data used in this paper includes 303 medical records from patients at risk of heart disease. The 14 terms recorded are as follows:
+
+```{r}
+#Creating a nice looking table to explain variables using gt package.
+Terms = c("age", "sex", "cp", "trestbps", "chol", "fbs", "restech", "thalach", "exang", "oldpeak", "slope", "ca", "thal", "num")
+Definitions = c("Age in years", "Male/Female", "Chest pain level (0-4)", "Resting blood pressure (mmHg)", "Serum cholesterol (mg/dl)", "Fasting blood sugar (high/low)", "Resting electrocardiographic normality", "Maximum heart rate achieved", "Exercise induced angina (yes/no)", "ST depression induced by exercise relative to rest", "Peak exercise ST segment slope (up, flat, down)", "Number of major vessels colored by flourosopy  (0-3)", "Heart defect (none/fixed/reversible)", "Presence of heart disease (none/levels of severity 1-4)")
+
+records = t(as.data.frame(rbind(Terms, Definitions)))
+records = as.data.frame(records)
+records %>% #this package looks nice, but takes FOREVER to render...
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(title = "Medical Records")
+```
+
+## Can we show all the data at once?
+
+<center>
+```{r}
+#all in one plot
+heartPC = princomp(heart, cor = T)
+#summary(heartPC, loadings = T) #only 37.55% explained with 2 comps
+
+autoplot(heartPC, loadings=T, loadings.label=T, data = heart, color = as.factor(num)) 
+```
+</center>
+
+##### **Yes (but we shouldn't.)**
+
+The above chart is the representation of all 14 variables in a 2-dimensional plot. The one big observation that can be made is that patients with heart disease (colored) are grouped on the right and patients without (black) are grouped on the left. Other notable groupings are that males are more likely to be closer to the top, while females will likely fall towards the bottom, older people will be higher up than younger people, and the higher the heart rate, the farther left the person should fall. Aside from these observations, you can vaguely interpret what the arrows mean. However, it is not easy to make any concrete observations off this image alone. Plus, only 37.55% of the variability is explained in this chart, making any observations not very accurate.
+
+## How we can we visualize the data more effectively?
+
+```{r, include=F}
+#dimension reduction. 
+cortest.bartlett(cor(heart), n=303) #super low pval
+KMO(cor(heart)) #Overall of .75 is good. 
+fa.out = principal(heart,nfactors=4,rotate="varimax")
+print.psych(fa.out,cut=.5,sort=TRUE) #No cross-loading!
+
+########## All quantitative variables ##########
+
+heartQuant = heartTest %>% select(age, trestbps, chol, thalach, oldpeak, num)
+cortest.bartlett(cor(heartQuant), n=303) #super low pval
+KMO(cor(heartQuant)) #all over .5
+fa.out = principal(heartQuant,nfactors=2,rotate="promax")
+print.psych(fa.out,cut=.5,sort=TRUE) #2 groupings of data without qualitative variables (except num)
+  #1. -thalach, oldpeak, num
+  #2. chol, trestbps, age
+
+quantPC = princomp(heartQuant, cor = T)
+summary(quantPC, loadings = T)
+```
+
+By conducting factor analysis and rotating the data in two different ways, we can group the data in two separate ways; each containing interesting observations. The first grouping was found using a Varimax rotation and contains 11/14 variables, not including: fbs, chol, and restecg which were deemed too independent from the other variables to include. The second grouping was found using a Promax rotation and only includes the quantitative variables: thalach, oldpeak, age, chol, trestbps, and the presence of heart disease: num. The first rotation resulted in 4 groups and the second rotation resulted in 2 groups. The results are shown below:
+
+<div style="display: flex; justify-content: space-between;">
+  <div style="width: 48%;">
+```{r}
+#had to write some html here
+group1 = c("cp", "num", "exang", "thalach")
+group2 = c("sex", "thal", " ", " ")
+group3 = c("age", "trestbps", "ca", " ")
+group4 = c("slope", "oldpeak", " ", " ")
+groupTable1 = rbind(group1, group2, group3, group4) %>% t() %>% as.data.frame()
+
+groupTable1 %>% #create table 1
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(title = "Varimax Grouping")
+```
+  </div>
+  <div style="width: 48%;">
+```{r}
+group1 = c("thalach", "oldpeak", "num", " ")
+group2 = c("chol", "trestbps", "age", " ")
+group3 = c(" ", " ", " ", " ")
+group4 = c(" ", " ", " ", " ")
+groupTable2 = rbind(group1, group2, group3, group4) %>% t() %>% as.data.frame()
+
+groupTable2 %>% #create table 2
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(title = "Promax Grouping")
+```
+  </div>
+</div>
+
+Now that we have the data split into smaller groups, we can begin to properly visualize it. Some of the groups ended up still not being useful for analysis, namely group 1 in Varimax and group 2 in Promax. However, the rest of the groups are quite small and worth looking into!
+
+#### **Exercise, Age, and ST segments**
+
+<div style="display: flex; justify-content: space-between;">
+  <div style="width: 48%;">
+```{r}
+#Reusing the html code from before to show these 2 related graphs side-by-side
+#Group 4 visualization
+heart4 = heart %>% select(slope, oldpeak)
+heart4$slope = as.factor(slope)
+heart4$labels = factor(heart4$slope, levels = c(1, 2, 3), labels = c("Upsloping", "Flat", "Downsloping"))
+
+ggplot(heart4, aes(x = slope, y = oldpeak))+
+  geom_boxplot(position = "dodge", outlier.shape = NA)+
+  geom_jitter(aes(color = labels), width = .15, height = 0)+
+  geom_abline(intercept = lm(oldpeak~slope)$coef[1], slope = lm(oldpeak~slope)$coef[2], linetype = "dashed")+
+  labs(x = "Slope Group", y = "ST Depression Induced by Exercise", color = NULL)+
+  theme(axis.text.x = element_blank())+
+  guides(color = FALSE) #only having one legend since it is the same colors
+  
+```
+  </div>
+  <div style="width: 48%;">
+```{r}
+heart5 = heart
+heart5$labels = factor(heart4$slope, levels = c(1, 2, 3), labels = c("Upsloping", "Flat", "Downsloping"))
+#lm(thalach~age+as.factor(slope))$coeff #obtain regression lines
+
+ggplot(data = heart5, aes(age, thalach, color = as.factor(slope)))+ #age, thalach looks good
+  geom_point()+
+  geom_abline(intercept = 203.8634, slope = -.8126464, color = "#F8766D", linetype = "dashed", size = .8)+ #factor 1
+  geom_abline(intercept = 203.8634-18.3850727, slope = -.8126464, color = "#00BA38", linetype = "dashed", size = .8)+ #factor 2
+  geom_abline(intercept = 203.8634-13.3574993, slope = -.8126464, color = "#619CFF", linetype = "dashed", size = .8)+ #factor 3
+  labs(x = "Age", y = "Max Heart Rate" ,color = "Peak Exercize ST Slope")+
+  scale_color_manual(values = c("1" = "#F8766D", "2" = "#00BA38", "3" = "#619CFF"), labels = c("1" = "Upsloping", "2" = "Flat", "3" = "Downsloping"))+
+  theme(legend.position = "left") #so it displays in the middle of the charts
+```  
+  </div>
+</div>
+
+The chart on the left is based off of group 4 from the Varimax rotation and shows the amount of depression in angle of the ST segment while exercising vs resting and is grouped by the slope angle category at peak exercise. The regression line shows that there is a linear relationship between the variables and the boxplots show that as slope decreases, the mean depression angle increases; as does its variability.
+
+The chart on the right shows that the max heart rate achieved and age have a negative linear relationship, and that the points are grouped by the same depression angle groupings as mentioned on the left. Each group has its own regression line, with patients with upsloping ST segments having the highest max heart rates, flat ST segment patients having the lowest, and downsloping ST segment patients somewhere in the middle.
+
+#### **How can we use this data to predict heart disease?**
+
+<center>
+```{r}
+ggplot(heartTest, aes(thalach, oldpeak, color = factor(num)))+
+  geom_point()+
+  scale_color_manual(values = c("0" = "#619CFF", "1" = "#F8766D"), labels = c("0" = "Not present", "1" = "Present"))+
+  labs(x = "Maximum Heart Rate", y = "ST Depression Induced by Exercise", color = "Heart Disease")+
+  stat_ellipse(linetype = 2, level = .95)+
+  ylim(0,7)
+```
+</center>
+
+Using group 1 from our Promax rotation, we link the Max Heart Rate and ST Depression variables together. The ellipses show where 95% of each type lie, and there is a large area where not present does not overlap with present. This shows that those with a low-medium maximum heart rate and moderate-severe exercise-induced ST depression are most likely to have heart disease. By doing this, we can use observations made in the previous two charts about how age and peak exercise slope affect heart disease diagnosis. 
+
+For example, it was previously shown that those with an older age and a flat ST slope at peak exercise have a lower max heart rate, so we can use the new chart to infer that that same group has a higher chance of having heart disease. Similarly, as shown in the chart on the top left, those with downsloping ST segments have a higher average ST Depression, which also implies a higher chance of heart disease.
+
+
+```{r, include = F}
+#Group 3 visualization
+#Ended up not including this because it didn't add much to the presentation.
+heart3 = heart %>% select(sex, thal)
+
+for(i in 1:303){
+  if(heart3$thal[i] == 6){
+    heart3$thal[i] = 5
+  }
+  if(heart3$thal[i] == 0){
+    heart3$thal[i] = heart3$thal[-i]
+  }
+}
+
+heart3.1=heart3
+for(i in 1:303){
+  if(heart3.1$sex[i] == 1){
+    heart3.1$sex[i] = "Male"
+  }else{
+    heart3.1$sex[i] = "Female"
+  }
+} #I know there's a way easier way to do this but I couldn't be bothered to figure it out.
+
+ggplot(heart3, aes(thal, sex, color = factor(heartTest$num)))+ #heart3.1$sex, shape = factor(heartTest$num)))+
+  geom_jitter()+
+  geom_hline(yintercept = 0.5, linetype = "dashed")+
+  geom_vline(xintercept = 4, linetype = "dashed")+
+  geom_vline(xintercept = 6, linetype = "dashed")+
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank())+
+  scale_color_manual(values = c("0" = "#619CFF", "1" = "#F8766D"), labels = c("0" = "Not present", "1" = "Present"))+
+  labs(color = "Heart Disease",
+       y="Female                                        Male",
+       x="      None                                Fixed                                Reversible")
+#white space used to line up labels with "rows and columns"
+
+#This chart represents Varimax group 2. An observation that can be made is that having no defect seems to have a much larger proportion of female patients as compared to males.  Also notable is that it seems proportionally more likely that if a female does have a defect, it is less likely to be fixed. 
+
+#It also turns out that the most correlated factor for the presence of heart disease is the presence of a heart defect, so I added on the num variable as the color to showcase this.
+
+```
+
+```{r, include=F}
+#I was not super happy with how this one turned out, so it was left out of the report.
+
+heartTestAge = heartTest #Turning age into a categorical variable
+for(i in 1:303){
+  if(heartTestAge$age[i] >= 45 && heartTestAge$age[i] <= 60){
+    heartTestAge$age[i] = 2
+  }
+  else if(heartTestAge$age[i] < 45){
+    heartTestAge$age[i] = 1
+  }
+  else if(heartTestAge$age[i] > 60){
+    heartTestAge$age[i] = 3
+  }
+}
+
+lm(trestbps~chol+factor(age))$coeff
+
+ggplot(heartTestAge[heartTestAge$chol <= 375,], aes(chol, trestbps, color = as.factor(age)))+
+  geom_point()+
+  geom_abline(intercept = 117.40670812, slope = .02867871)+
+  geom_abline(intercept = 117.40670812+7.27589281, slope = .02867871)+
+  geom_abline(intercept = 117.40670812+12.08183749, slope = .02867871)
+```
+
+## Can we use this data to predict heart disease in future patients?
+
+Using all the connections observed above, along with many others that are harder to see, I created a model to predict whether or not somebody has heart disease based off of the 13 other variables provided in the medical records.
+
+```{r, include = F}
+#Creating a model to predict presence of heart disease:
+accuracyVec = c()
+specVec = c()
+sensVec = c()
+for(t in 1){ #used this loop to iterate over 1000
+  smp_size = floor(0.75 * nrow(heartTest))
+  train_ind = sample(nrow(heartTest), size = smp_size)
+  training.df = as.data.frame(heartTest[train_ind, ])
+  testing.df = as.data.frame(heartTest[-train_ind, ])
+  
+  prior = table(heartTest$num)[2]/nrow(heartTest) #Percentage of observations with heart disease
+  dis = lda(num ~ ., data=training.df, prior=c(prior, 1-prior))
+  
+  testPred = as.data.frame(predict(dis, newdata = testing.df)$class)
+  testActual = as.data.frame(testing.df$num)
+  
+  truePos = 0
+  falsePos = 0
+  trueNeg = 0
+  falseNeg = 0
+  for(i in 1:nrow(testPred)){
+    if(testPred[i,1] == 1 && testActual[i,1] == 1){
+      truePos = truePos+1
+    }
+    if(testPred[i,1] == 1 && testActual[i,1] == 0){
+      falsePos = falsePos+1
+    }
+    if(testPred[i,1] == 0 && testActual[i,1] == 0){
+      trueNeg = trueNeg+1
+    }
+    if(testPred[i,1] == 0 && testActual[i,1] == 1){
+      falseNeg = falseNeg+1
+    }
+  }
+  
+  #accuracy
+  accuracy = (truePos+trueNeg)/(truePos+trueNeg+falsePos+falseNeg)
+  
+  #sensitivity
+  sensitivity = truePos/(truePos+falseNeg)
+
+  #specificity
+  specificity = trueNeg/(trueNeg+falsePos)
+  
+accuracyVec = c(accuracyVec, accuracy)
+sensVec = c(sensVec, sensitivity)
+specVec = c(specVec, specificity)
+
+}
+
+#results from 1000 test:
+mean(accuracyVec) #.8327
+mean(sensVec) #.7968
+mean(specVec) #.8628
+```
+
+##### **About the model:**
+
+In our observations, there are 139 patients with heart disease out of 303 total patients. With this prior information of a 45.87% positive rate, we can use linear discriminant analysis to predict whether or not a new patient has heart disease given the 13 variables. 
+
+After being run 1000 times with random samples, this model is able to accurately predict whether or not someone has heart disease 83.27% of the time, given the other variables. Furthermore, it is 79.68% accurate in predicting a true case, and 86.28% accurate in predicting a false case.
+
+**Let's test on a random 5 patients:** 
+
+*Note: the num variable is the true value and is not included when given to the model.*
+
+```{r}
+n = sample(1:298, 1)
+heartTest[n:(n+4),] %>%
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(title = "Patient Info:")
+
+example = heart[n:(n+4),1:13]
+cat("Prediction:\n")
+predict(dis,newdata=example)$class
+#Note: I handpicked an output where the model got every prediction right, but it does seem to make correct predictions around the stated 83.27%
+```
+
+##### **Using the model:**
+
+Given our new patient, Gertrude Smith, a 60 year old female with non-anginal pain, a resting blood pressure of 102 mm Hg, a cholesterol measurement of 318 mg/dl, low fasting blood sugar, normal resting electrocardiographic results, a maximum heart rate of 160 beats/minute, no exercise-induced angina, no ST depression induced by exercise relative to rest, upsloping peak ST segment, only 1 colored major vessel, and normal thal diagnosis, we can predict whether or not she has heart disease by putting her info into the model:
+
+```{r}
+newPat = rbind(example, c(60, 0, 3, 102, 318, 0, 0, 160, 0, 0, 1, 1, 3))
+newPat = newPat[6,]
+newPat %>%
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(title = "Smith, Gertrude:") #I gave the patient an arbitrary name to make the presentation more interesting.
+
+cat("Prediction:\n")
+predict(dis,newdata=newPat)$class
+```
+
+##### **The model predicts that Gertrude does *not* have heart disease.**
+
+As stated above, the model is only 86.28% accurate in giving a true negative, so there is still a 13.72% chance that the model returned a false negative and Gertrude **does** have heart disease. However, 86.28% is a pretty high likelihood and it would likely be more beneficial to look for another cause of Gertrude's symptoms before testing for heart disease. 
+
+## Can we use our observations made earlier to help make predictions?
+
+```{r, include = F}
+#Creating a model to predict presence of heart disease using only age, slope, thalach, oldpeak, num:
+accuracyVec = c()
+specVec = c()
+sensVec = c()
+heartTest2 = heartTest %>%
+  select(age, slope, thalach, oldpeak, num)
+for(t in 1){ #used this loop to iterate over 1000
+  smp_size = floor(0.75 * nrow(heartTest2))
+  train_ind = sample(nrow(heartTest2), size = smp_size)
+  training.df = as.data.frame(heartTest2[train_ind, ])
+  testing.df = as.data.frame(heartTest2[-train_ind, ])
+  
+  prior = table(heartTest2$num)[2]/nrow(heartTest2) #Percentage of observations with heart disease
+  dis = lda(num ~ ., data=training.df, prior=c(prior, 1-prior))
+  
+  testPred = as.data.frame(predict(dis, newdata = testing.df)$class)
+  testActual = as.data.frame(testing.df$num)
+  
+  truePos = 0
+  falsePos = 0
+  trueNeg = 0
+  falseNeg = 0
+  for(i in 1:nrow(testPred)){
+    if(testPred[i,1] == 1 && testActual[i,1] == 1){
+      truePos = truePos+1
+    }
+    if(testPred[i,1] == 1 && testActual[i,1] == 0){
+      falsePos = falsePos+1
+    }
+    if(testPred[i,1] == 0 && testActual[i,1] == 0){
+      trueNeg = trueNeg+1
+    }
+    if(testPred[i,1] == 0 && testActual[i,1] == 1){
+      falseNeg = falseNeg+1
+    }
+  }
+  
+  #accuracy
+  accuracy = (truePos+trueNeg)/(truePos+trueNeg+falsePos+falseNeg)
+  
+  #sensitivity
+  sensitivity = truePos/(truePos+falseNeg)
+
+  #specificity
+  specificity = trueNeg/(trueNeg+falsePos)
+  
+accuracyVec = c(accuracyVec, accuracy)
+sensVec = c(sensVec, sensitivity)
+specVec = c(specVec, specificity)
+
+}
+
+#results from 1000 test:
+mean(accuracyVec) #.6711
+mean(sensVec) #.6207
+mean(specVec) #.7021
+
+#Note: I am also cherry-picking cases that the model gets wrong for the presentation. But it gets all right a lot of the time too!
+```
+
+I created a reduced model using only using the age, thalach, slope, and oldpeak variables; as used in the charts above. Doing this resulted in an accuracy of 67.11%, a 62.07% rate of true positive, and a 70.21% rate of true negative. While this is a pretty big drop in quality from the 83.27%, 79.68%, and 86.28% of the full model, the reduced model only contains 4 predictors compared to the 13 of the full model. Referring back to the "Patient Info" chart above, let's try out the reduced model on the same 5 patients as out full model, as well as Gertrude:
+
+```{r}
+cat("Patient prediction:\n")
+predict(dis,newdata=example)$class
+
+cat("Gertrude prediction:\n")
+predict(dis,newdata=newPat)$class
+```
+
+As shown here, this model is not as accurate as the full model. However, it still made the same negative prediction about Gertrude as the full model. Since age is already given without testing and the other 3 variables can be obtained with a single test, performing said test first would be the quickest way to make a general assumption about a patient before performing further testing.
+
+## Conclusion
+
+Quite a few observations can be made from the 14 terms listed in the 303 patients' medical records. I found that, of the 13 predictor variables, some of the most important and easiest to visualize variables are the ST Slope, ST Depression Induced by Exercise, Maximum Heart Rate, and Age. Using the 13 predictor variables to predict presence of heart disease, a model can be used to make predictions with 83.27% accuracy and a model using only the 4 aforementioned variables could be used with an accuracy of 67.11%. Since the model was only trained on 303 patients, the accuracy has potential to grow with more cases introduced.
